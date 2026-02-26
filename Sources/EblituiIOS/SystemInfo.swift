@@ -54,7 +54,7 @@ public struct SystemInfo: Codable {
     public let extensions: [String]
     public let screenWidth: Int
     public let maxScreenHeight: Int
-    public let aspectRatio: Double
+    public let pixelAspectRatio: Double
     public let sampleRate: Int
     public let buttons: [ButtonInfo]
     public let players: Int
@@ -73,7 +73,7 @@ public struct SystemInfo: Codable {
         case extensions = "Extensions"
         case screenWidth = "ScreenWidth"
         case maxScreenHeight = "MaxScreenHeight"
-        case aspectRatio = "AspectRatio"
+        case pixelAspectRatio = "PixelAspectRatio"
         case sampleRate = "SampleRate"
         case buttons = "Buttons"
         case players = "Players"

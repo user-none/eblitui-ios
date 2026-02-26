@@ -5,6 +5,7 @@ import GameController
 /// Main gameplay view with emulator and touch controls
 public struct GameplayView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     let gameCRC: String
     let resume: Bool
 
@@ -20,25 +21,51 @@ public struct GameplayView: View {
 
     public var body: some View {
         GeometryReader { geometry in
+            let isPortrait = geometry.size.height > geometry.size.width
+            let dar = Double(EmulatorBridge.systemInfo.screenWidth) / Double(EmulatorBridge.systemInfo.maxScreenHeight) * EmulatorBridge.systemInfo.pixelAspectRatio
+            let gameHeight = geometry.size.width / dar
+
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if let manager = emulatorManager {
-                    // Metal view for emulator display
-                    MetalEmulatorView(
-                        manager: manager,
-                        size: geometry.size
+                if isPortrait {
+                    VStack(spacing: 0) {
+                        if let manager = emulatorManager {
+                            MetalEmulatorView(
+                                manager: manager,
+                                size: CGSize(width: geometry.size.width, height: gameHeight)
+                            )
+                            .frame(width: geometry.size.width, height: gameHeight)
+                        } else {
+                            Color.clear.frame(height: gameHeight)
+                        }
+
+                        TouchControlsView(
+                            buttonMask: $buttonMask,
+                            onMenuTap: { showPauseMenu = true }
+                        )
+                    }
+                } else {
+                    let fullWidth = geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
+                    let fullHeight = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+                    let fullSize = CGSize(width: fullWidth, height: fullHeight)
+
+                    if let manager = emulatorManager {
+                        MetalEmulatorView(
+                            manager: manager,
+                            size: fullSize
+                        )
+                        .frame(width: fullWidth, height: fullHeight)
+                        .ignoresSafeArea()
+                    }
+
+                    TouchControlsView(
+                        buttonMask: $buttonMask,
+                        onMenuTap: { showPauseMenu = true }
                     )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .frame(width: fullWidth, height: fullHeight)
                     .ignoresSafeArea()
                 }
-
-                // Touch controls overlay
-                TouchControlsView(
-                    buttonMask: $buttonMask,
-                    onMenuTap: { showPauseMenu = true }
-                )
-                .ignoresSafeArea()
 
                 // Pause menu overlay
                 if showPauseMenu {
@@ -49,7 +76,6 @@ public struct GameplayView: View {
                 }
             }
         }
-        .ignoresSafeArea()
         .statusBar(hidden: true)
         .persistentSystemOverlays(.hidden)
         .onAppear {
@@ -68,6 +94,11 @@ public struct GameplayView: View {
                 emulatorManager?.pause()
             } else {
                 emulatorManager?.resume()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase != .active {
+                showPauseMenu = true
             }
         }
     }

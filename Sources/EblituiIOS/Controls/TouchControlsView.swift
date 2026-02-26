@@ -103,8 +103,6 @@ public struct TouchControlsView: View {
     @ViewBuilder
     private func portraitLayout(size: CGSize) -> some View {
         VStack {
-            Spacer()
-
             // Menu and Start above controls
             HStack(spacing: 15) {
                 CircleButton(label: "MENU", isPressed: .constant(false)) {
@@ -116,6 +114,7 @@ public struct TouchControlsView: View {
                         .frame(width: 50, height: 50)
                 }
             }
+            .padding(.top, 80)
             .padding(.bottom, 10)
 
             // D-Pad and action buttons
@@ -135,7 +134,8 @@ public struct TouchControlsView: View {
                 actionButtonsView
                     .padding(.trailing, 20)
             }
-            .padding(.bottom, 80)
+
+            Spacer()
         }
     }
 

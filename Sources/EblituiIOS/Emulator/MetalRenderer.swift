@@ -19,6 +19,9 @@ class MetalRenderer: NSObject, MTKViewDelegate {
     private var currentWidth: Int
     private var currentHeight: Int
 
+    // Pixel aspect ratio from SystemInfo (used to compute DAR per frame)
+    private let pixelAspectRatio: Float
+
     // Callback for frame requests
     var onFrameRequest: (() -> FrameData?)?
 
@@ -29,6 +32,7 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         let info = EmulatorBridge.systemInfo
         self.currentWidth = info.screenWidth
         self.currentHeight = info.maxScreenHeight
+        self.pixelAspectRatio = Float(info.pixelAspectRatio)
 
         guard let device = MTLCreateSystemDefaultDevice(),
               let commandQueue = device.makeCommandQueue() else {
@@ -209,7 +213,7 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         let effectiveSize = view.bounds.size
         let viewAspect = Float(effectiveSize.width / effectiveSize.height)
 
-        let textureAspect = Float(currentWidth) / Float(currentHeight)
+        let textureAspect = (Float(currentWidth) / Float(currentHeight)) * pixelAspectRatio
 
         var scaleX: Float = 1.0
         var scaleY: Float = 1.0
@@ -222,16 +226,11 @@ class MetalRenderer: NSObject, MTKViewDelegate {
             scaleY = viewAspect / textureAspect
         }
 
-        // Only apply vertical offset in portrait mode (when view is taller than texture)
-        // In landscape, game fills full height and is centered horizontally
-        let isPortrait = viewAspect < textureAspect
-        let offsetY: Float = isPortrait ? (1.0 - scaleY) * 0.4 : 0.0
-
         let vertices: [Float] = [
-            -scaleX, -scaleY + offsetY, 0.0, 1.0,
-             scaleX, -scaleY + offsetY, 1.0, 1.0,
-            -scaleX,  scaleY + offsetY, 0.0, 0.0,
-             scaleX,  scaleY + offsetY, 1.0, 0.0,
+            -scaleX, -scaleY, 0.0, 1.0,
+             scaleX, -scaleY, 1.0, 1.0,
+            -scaleX,  scaleY, 0.0, 0.0,
+             scaleX,  scaleY, 1.0, 0.0,
         ]
 
         renderEncoder.setRenderPipelineState(pipelineState)
