@@ -22,8 +22,9 @@ public struct GameplayView: View {
     public var body: some View {
         GeometryReader { geometry in
             let isPortrait = geometry.size.height > geometry.size.width
-            let dar = Double(EmulatorBridge.systemInfo.screenWidth) / Double(EmulatorBridge.systemInfo.maxScreenHeight) * EmulatorBridge.systemInfo.pixelAspectRatio
-            let gameHeight = geometry.size.width / dar
+            // Use 4:3 (standard CRT) for initial layout; the Metal
+            // renderer computes the correct DAR per-frame.
+            let gameHeight = geometry.size.width * 3.0 / 4.0
 
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -42,6 +43,7 @@ public struct GameplayView: View {
 
                         TouchControlsView(
                             buttonMask: $buttonMask,
+                            isPortrait: true,
                             onMenuTap: { showPauseMenu = true }
                         )
                     }
@@ -61,6 +63,7 @@ public struct GameplayView: View {
 
                     TouchControlsView(
                         buttonMask: $buttonMask,
+                        isPortrait: false,
                         onMenuTap: { showPauseMenu = true }
                     )
                     .frame(width: fullWidth, height: fullHeight)

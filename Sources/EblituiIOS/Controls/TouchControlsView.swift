@@ -6,6 +6,7 @@ import UIKit
 public struct TouchControlsView: View {
     @Binding var buttonMask: Int
     var onMenuTap: () -> Void
+    let isPortrait: Bool
 
     // Haptic feedback generator
     private let impactGenerator = UIImpactFeedbackGenerator(style: .light)
@@ -21,8 +22,9 @@ public struct TouchControlsView: View {
     @State private var dpadRight = false
     @State private var actionStates: [Int: Bool] = [:]
 
-    public init(buttonMask: Binding<Int>, onMenuTap: @escaping () -> Void) {
+    public init(buttonMask: Binding<Int>, isPortrait: Bool, onMenuTap: @escaping () -> Void) {
         self._buttonMask = buttonMask
+        self.isPortrait = isPortrait
         self.onMenuTap = onMenuTap
         let allButtons = EmulatorBridge.systemInfo.buttons
         self.startButton = allButtons.first(where: { $0.name == "Start" })
@@ -31,12 +33,10 @@ public struct TouchControlsView: View {
 
     public var body: some View {
         GeometryReader { geometry in
-            let isLandscape = geometry.size.width > geometry.size.height
-
-            if isLandscape {
-                landscapeLayout(size: geometry.size)
-            } else {
+            if isPortrait {
                 portraitLayout(size: geometry.size)
+            } else {
+                landscapeLayout(size: geometry.size)
             }
         }
         .onChange(of: dpadUp) { _, _ in recalculateMask() }
@@ -103,6 +103,10 @@ public struct TouchControlsView: View {
     @ViewBuilder
     private func portraitLayout(size: CGSize) -> some View {
         VStack {
+            // Flexible top spacing: pushes controls down on tall
+            // screens, shrinks when space is tight.
+            Spacer().frame(maxHeight: 65)
+
             // Menu and Start above controls
             HStack(spacing: 15) {
                 CircleButton(label: "MENU", isPressed: .constant(false)) {
@@ -114,7 +118,6 @@ public struct TouchControlsView: View {
                         .frame(width: 50, height: 50)
                 }
             }
-            .padding(.top, 80)
             .padding(.bottom, 10)
 
             // D-Pad and action buttons

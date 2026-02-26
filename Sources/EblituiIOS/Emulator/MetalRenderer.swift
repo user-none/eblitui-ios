@@ -19,7 +19,7 @@ class MetalRenderer: NSObject, MTKViewDelegate {
     private var currentWidth: Int
     private var currentHeight: Int
 
-    // Pixel aspect ratio from SystemInfo (used to compute DAR per frame)
+    // Pixel aspect ratio from SystemInfo for per-frame DAR computation
     private let pixelAspectRatio: Float
 
     // Callback for frame requests
@@ -213,6 +213,7 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         let effectiveSize = view.bounds.size
         let viewAspect = Float(effectiveSize.width / effectiveSize.height)
 
+        // Compute DAR per-frame from actual texture dimensions and PAR
         let textureAspect = (Float(currentWidth) / Float(currentHeight)) * pixelAspectRatio
 
         var scaleX: Float = 1.0
