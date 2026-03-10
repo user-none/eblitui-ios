@@ -6,11 +6,8 @@ public class ArtworkDownloader {
     private static let downloadTimeout: TimeInterval = 10
     private static let maxArtworkSize = 2 * 1024 * 1024  // 2MB
 
-    // Artwork base URL constructed from SystemInfo
-    private static var baseURL: String {
-        let info = EmulatorBridge.systemInfo
-        return "https://raw.githubusercontent.com/libretro-thumbnails/\(info.thumbnailRepo)/master/Named_Boxarts/"
-    }
+    // Artwork base URL template
+    private static let baseURLTemplate = "https://raw.githubusercontent.com/libretro-thumbnails/%@/master/Named_Boxarts/"
 
     // Custom URLSession with timeout
     private lazy var urlSession: URLSession = {
@@ -22,14 +19,15 @@ public class ArtworkDownloader {
 
     public init() {}
 
-    /// Download artwork for a game
+    /// Download artwork for a game using the specified thumbnail repo
     /// Returns true if artwork was successfully downloaded
     @discardableResult
-    public func download(for crc: String, gameName: String) async -> Bool {
+    public func download(for crc: String, gameName: String, thumbnailRepo: String) async -> Bool {
         // Format the game name for the URL
         let encodedName = encodeForURL(gameName)
 
-        guard let url = URL(string: "\(Self.baseURL)\(encodedName).png") else {
+        let baseURL = String(format: Self.baseURLTemplate, thumbnailRepo)
+        guard let url = URL(string: "\(baseURL)\(encodedName).png") else {
             return false
         }
 

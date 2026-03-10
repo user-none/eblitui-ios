@@ -47,6 +47,19 @@ public struct CoreOption: Codable {
     }
 }
 
+/// A metadata variant pairing an RDB database with its thumbnail repository
+public struct MetadataVariant: Codable {
+    public let name: String
+    public let rdbName: String
+    public let thumbnailRepo: String
+
+    enum CodingKeys: String, CodingKey {
+        case name = "Name"
+        case rdbName = "RDBName"
+        case thumbnailRepo = "ThumbnailRepo"
+    }
+}
+
 /// System metadata decoded from the Go bridge's SystemInfoJSON
 public struct SystemInfo: Codable {
     public let name: String
@@ -59,8 +72,7 @@ public struct SystemInfo: Codable {
     public let buttons: [ButtonInfo]
     public let players: Int
     public let coreOptions: [CoreOption]?
-    public let rdbName: String
-    public let thumbnailRepo: String
+    public let metadataVariants: [MetadataVariant]?
     public let dataDirName: String
     public let consoleID: Int
     public let coreName: String
@@ -78,8 +90,7 @@ public struct SystemInfo: Codable {
         case buttons = "Buttons"
         case players = "Players"
         case coreOptions = "CoreOptions"
-        case rdbName = "RDBName"
-        case thumbnailRepo = "ThumbnailRepo"
+        case metadataVariants = "MetadataVariants"
         case dataDirName = "DataDirName"
         case consoleID = "ConsoleID"
         case coreName = "CoreName"

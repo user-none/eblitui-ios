@@ -27,18 +27,27 @@ public struct RDBGameInfo {
     }
 }
 
-/// Parser for libretro RDB (RetroDatabase) files
-/// The RDB format uses MessagePack encoding
-public class RDBParser {
-    private var games: [RDBGameInfo] = []
-    private var byCRC32: [UInt32: RDBGameInfo] = [:]
+/// Result of an RDB lookup including which variant matched
+public struct RDBLookupResult {
+    public let game: RDBGameInfo
+    public let variantIndex: Int
+}
 
-    // RDB download URL constructed from SystemInfo
-    private static var rdbURL: String {
-        let info = EmulatorBridge.systemInfo
-        let encoded = info.rdbName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? info.rdbName
-        return "https://raw.githubusercontent.com/libretro/libretro-database/master/rdb/\(encoded).rdb"
+/// Parser for libretro RDB (RetroDatabase) files.
+/// Supports multiple RDB variants for systems that span multiple databases.
+public class RDBParser {
+    /// Per-variant parsed data
+    private struct VariantData {
+        let rdbName: String
+        let thumbnailRepo: String
+        var games: [RDBGameInfo] = []
+        var byCRC32: [UInt32: RDBGameInfo] = [:]
     }
+
+    private var variants: [VariantData] = []
+
+    // RDB download base URL
+    private static let rdbBaseURL = "https://raw.githubusercontent.com/libretro/libretro-database/master/rdb"
 
     // Maximum download size (5MB)
     private static let maxDownloadSize = 5 * 1024 * 1024
@@ -61,19 +70,63 @@ public class RDBParser {
     private static let mpfUint64: UInt8 = 0xcf
     private static let mpfNil: UInt8 = 0xc0
 
-    public var gameCount: Int { games.count }
-
-    public init() {}
-
-    /// Load RDB from file
-    public func load(from path: String) throws {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        parse(data: data)
+    public var gameCount: Int {
+        variants.reduce(0) { $0 + $1.games.count }
     }
 
-    /// Download and load the RDB
+    public init() {
+        let info = EmulatorBridge.systemInfo
+        if let metadataVariants = info.metadataVariants {
+            for v in metadataVariants {
+                variants.append(VariantData(rdbName: v.rdbName, thumbnailRepo: v.thumbnailRepo))
+            }
+        }
+    }
+
+    /// Load all variant RDB files from disk
+    public func loadAll() throws {
+        for i in 0..<variants.count {
+            let path = StoragePaths.rdbPath(for: variants[i].rdbName)
+            if FileManager.default.fileExists(atPath: path) {
+                let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                let games = parseGames(data: data)
+                variants[i].games = games
+                variants[i].byCRC32 = [:]
+                for game in games where game.crc32 != 0 {
+                    variants[i].byCRC32[game.crc32] = game
+                }
+            }
+        }
+    }
+
+    /// Load a single RDB from a path (legacy, loads into first variant)
+    public func load(from path: String) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let games = parseGames(data: data)
+        if variants.isEmpty {
+            variants.append(VariantData(rdbName: "", thumbnailRepo: ""))
+        }
+        variants[0].games = games
+        variants[0].byCRC32 = [:]
+        for game in games where game.crc32 != 0 {
+            variants[0].byCRC32[game.crc32] = game
+        }
+    }
+
+    /// Download and load all variant RDB files
     public func downloadAndLoad() async throws {
-        guard let url = URL(string: Self.rdbURL) else {
+        for i in 0..<variants.count {
+            try await downloadVariant(index: i)
+        }
+    }
+
+    /// Download a single variant RDB
+    private func downloadVariant(index: Int) async throws {
+        let rdbName = variants[index].rdbName
+        let encoded = rdbName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rdbName
+        let urlString = "\(Self.rdbBaseURL)/\(encoded).rdb"
+
+        guard let url = URL(string: urlString) else {
             throw RDBError.invalidURL
         }
 
@@ -84,31 +137,65 @@ public class RDBParser {
             throw RDBError.downloadFailed
         }
 
-        // Enforce size limit to prevent DoS
         guard data.count <= Self.maxDownloadSize else {
             throw RDBError.fileTooLarge
         }
 
         // Save to disk
         try StoragePaths.ensureDirectoriesExist()
-        try data.write(to: URL(fileURLWithPath: StoragePaths.rdbPath))
+        let path = StoragePaths.rdbPath(for: rdbName)
+        try data.write(to: URL(fileURLWithPath: path))
 
         // Parse the data
-        parse(data: data)
-    }
-
-    /// Lookup a game by CRC32
-    public func lookup(crc32: UInt32) -> RDBGameInfo? {
-        return byCRC32[crc32]
-    }
-
-    /// Parse RDB data
-    private func parse(data: Data) {
-        games = parseGames(data: data)
-        byCRC32 = [:]
+        let games = parseGames(data: data)
+        variants[index].games = games
+        variants[index].byCRC32 = [:]
         for game in games where game.crc32 != 0 {
-            byCRC32[game.crc32] = game
+            variants[index].byCRC32[game.crc32] = game
         }
+    }
+
+    /// Lookup a game by CRC32 across all variants
+    public func lookup(crc32: UInt32) -> RDBGameInfo? {
+        for v in variants {
+            if let game = v.byCRC32[crc32] {
+                return game
+            }
+        }
+        return nil
+    }
+
+    /// Lookup a game by CRC32 with variant information
+    public func lookupWithVariant(crc32: UInt32) -> RDBLookupResult? {
+        for (i, v) in variants.enumerated() {
+            if let game = v.byCRC32[crc32] {
+                return RDBLookupResult(game: game, variantIndex: i)
+            }
+        }
+        return nil
+    }
+
+    /// Get the thumbnail repo for a variant index
+    public func thumbnailRepo(for variantIndex: Int) -> String {
+        guard variantIndex >= 0 && variantIndex < variants.count else { return "" }
+        return variants[variantIndex].thumbnailRepo
+    }
+
+    /// Get the display name for a variant index
+    public func variantName(for variantIndex: Int) -> String {
+        guard variantIndex >= 0 && variantIndex < variants.count else { return "" }
+        return EmulatorBridge.systemInfo.metadataVariants?[variantIndex].name ?? ""
+    }
+
+    /// Check if all variant RDB files exist on disk
+    public func allRDBsExist() -> Bool {
+        for v in variants {
+            let path = StoragePaths.rdbPath(for: v.rdbName)
+            if !FileManager.default.fileExists(atPath: path) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Parse all games from RDB data

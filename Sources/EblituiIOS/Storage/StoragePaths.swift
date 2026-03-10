@@ -36,10 +36,9 @@ public enum StoragePaths {
         appSupportDirectory.appendingPathComponent("metadata", isDirectory: true)
     }
 
-    /// RDB file path (uses dataDirName from SystemInfo)
-    public static var rdbPath: String {
-        let info = EmulatorBridge.systemInfo
-        return metadataDirectory.appendingPathComponent("\(info.dataDirName).rdb").path
+    /// RDB file path for a specific RDB name
+    public static func rdbPath(for rdbName: String) -> String {
+        return metadataDirectory.appendingPathComponent("\(rdbName).rdb").path
     }
 
     /// Saves directory

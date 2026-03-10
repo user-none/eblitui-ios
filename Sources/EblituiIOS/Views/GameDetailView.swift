@@ -7,6 +7,7 @@ public struct GameDetailView: View {
 
     @State private var artworkImage: UIImage?
     @State private var rdbInfo: RDBGameInfo?
+    @State private var variantName: String?
     @State private var hasResumeState = false
 
     private var game: GameEntry? {
@@ -227,7 +228,7 @@ public struct GameDetailView: View {
                     MetadataRow(label: "Last Played", value: formatLastPlayed(game.lastPlayed))
                 }
 
-                MetadataRow(label: "System", value: EmulatorBridge.systemInfo.consoleName)
+                MetadataRow(label: "System", value: variantName ?? EmulatorBridge.systemInfo.consoleName)
             }
             .padding()
             .background(Color.gray.opacity(0.2))
@@ -247,7 +248,13 @@ public struct GameDetailView: View {
 
         // Load RDB info
         if let crc32 = UInt32(gameCRC, radix: 16) {
-            rdbInfo = appState.lookupGame(crc32: crc32)
+            if let result = appState.rdbParser.lookupWithVariant(crc32: crc32) {
+                rdbInfo = result.game
+                let variantCount = EmulatorBridge.systemInfo.metadataVariants?.count ?? 0
+                if variantCount > 1 {
+                    variantName = appState.rdbParser.variantName(for: result.variantIndex)
+                }
+            }
         }
 
         // Check for resume state

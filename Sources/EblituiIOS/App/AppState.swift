@@ -128,10 +128,9 @@ public class AppState: ObservableObject {
     // MARK: - RDB Management
 
     public func loadRDBIfAvailable() async {
-        let rdbPath = StoragePaths.rdbPath
-        if FileManager.default.fileExists(atPath: rdbPath) {
+        if rdbParser.allRDBsExist() {
             do {
-                try rdbParser.load(from: rdbPath)
+                try rdbParser.loadAll()
                 isRDBLoaded = true
             } catch {
                 Log.storage.error("Failed to load RDB: \(error.localizedDescription)")
@@ -192,11 +191,12 @@ public class AppState: ObservableObject {
             if !FileManager.default.fileExists(atPath: artPath) {
                 // Use No-Intro name from RDB for artwork lookup
                 guard let crc32 = UInt32(crc, radix: 16),
-                      let rdbGame = rdbParser.lookup(crc32: crc32) else {
+                      let result = rdbParser.lookupWithVariant(crc32: crc32) else {
                     continue
                 }
-                Log.network.debug("Downloading artwork for \(rdbGame.name)")
-                if await artworkDownloader.download(for: crc, gameName: rdbGame.name) {
+                let thumbnailRepo = rdbParser.thumbnailRepo(for: result.variantIndex)
+                Log.network.debug("Downloading artwork for \(result.game.name)")
+                if await artworkDownloader.download(for: crc, gameName: result.game.name, thumbnailRepo: thumbnailRepo) {
                     artworkVersion += 1
                 }
             }
