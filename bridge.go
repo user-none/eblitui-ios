@@ -404,3 +404,11 @@ func SetOption(key string, value string) {
 		emu.SetOption(key, value)
 	}
 }
+
+// Start finalizes emulator state after all options are applied.
+// Must be called after SetOption and before the first RunFrame.
+func Start() {
+	if emu != nil {
+		emu.Start()
+	}
+}
