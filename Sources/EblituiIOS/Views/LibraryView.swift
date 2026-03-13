@@ -246,9 +246,10 @@ public struct LibraryView: View {
 
             // Download artwork using No-Intro name from RDB
             if let crc32 = UInt32(crcString, radix: 16),
-               let rdbGame = appState.lookupGame(crc32: crc32) {
+               let result = appState.rdbParser.lookupWithVariant(crc32: crc32) {
+                let thumbnailRepo = appState.rdbParser.thumbnailRepo(for: result.variantIndex)
                 Task {
-                    if await appState.artworkDownloader.download(for: crcString, gameName: rdbGame.name) {
+                    if await appState.artworkDownloader.download(for: crcString, gameName: result.game.name, thumbnailRepo: thumbnailRepo) {
                         appState.artworkVersion += 1
                     }
                 }

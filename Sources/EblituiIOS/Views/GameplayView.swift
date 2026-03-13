@@ -120,8 +120,9 @@ public struct GameplayView: View {
             return
         }
 
-        // Apply stored core options
+        // Apply stored core options and finalize emulator state
         manager.applyCoreOptions(appState.config.coreOptions)
+        manager.finalizeEmulator()
 
         // Load SRAM if available
         manager.loadSRAM(gameCRC: gameCRC)
@@ -492,6 +493,10 @@ class EmulatorManager: ObservableObject {
         for (key, value) in options {
             emulator.setOption(key: key, value: value)
         }
+    }
+
+    func finalizeEmulator() {
+        emulator.start()
     }
 
     // MARK: - Save State

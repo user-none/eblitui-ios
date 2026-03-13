@@ -3,7 +3,7 @@ package ios
 import (
 	"encoding/json"
 	"fmt"
-	emucore "github.com/user-none/eblitui/api"
+	"github.com/user-none/eblitui/coreif"
 	"github.com/user-none/eblitui/romloader"
 	"hash/crc32"
 	"os"
@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	factory      emucore.CoreFactory
-	emu          emucore.Emulator
-	saveStater   emucore.SaveStater
-	batterySaver emucore.BatterySaver
+	factory      coreif.CoreFactory
+	emu          coreif.Emulator
+	saveStater   coreif.SaveStater
+	batterySaver coreif.BatterySaver
 
 	// cached data
 	frameData []byte
@@ -25,7 +25,7 @@ var (
 )
 
 // RegisterFactory sets the CoreFactory. Called by core's init().
-func RegisterFactory(f emucore.CoreFactory) {
+func RegisterFactory(f coreif.CoreFactory) {
 	factory = f
 }
 
@@ -43,7 +43,7 @@ func Init(path string, regionCode int) bool {
 		return false
 	}
 
-	region := emucore.Region(regionCode)
+	region := coreif.Region(regionCode)
 	e, err := factory.CreateEmulator(rom, region)
 	if err != nil {
 		return false
@@ -52,8 +52,8 @@ func Init(path string, regionCode int) bool {
 	emu = e
 
 	// Detect optional interfaces
-	saveStater, _ = e.(emucore.SaveStater)
-	batterySaver, _ = e.(emucore.BatterySaver)
+	saveStater, _ = e.(coreif.SaveStater)
+	batterySaver, _ = e.(coreif.BatterySaver)
 
 	return true
 }
@@ -160,33 +160,33 @@ func FrameHeight() int {
 }
 
 // categoryString converts a CoreOptionCategory to its display name for iOS.
-func categoryString(c emucore.CoreOptionCategory) string {
+func categoryString(c coreif.CoreOptionCategory) string {
 	switch c {
-	case emucore.CoreOptionCategoryAudio:
+	case coreif.CoreOptionCategoryAudio:
 		return "Audio"
-	case emucore.CoreOptionCategoryVideo:
+	case coreif.CoreOptionCategoryVideo:
 		return "Video"
-	case emucore.CoreOptionCategoryInput:
+	case coreif.CoreOptionCategoryInput:
 		return "Input"
 	default:
 		return "Core"
 	}
 }
 
-// jsonCoreOption mirrors emucore.CoreOption with Category as a string
+// jsonCoreOption mirrors coreif.CoreOption with Category as a string
 // for iOS JSON serialization.
 type jsonCoreOption struct {
-	Key         string                 `json:"Key"`
-	Label       string                 `json:"Label"`
-	Description string                 `json:"Description"`
-	Type        emucore.CoreOptionType `json:"Type"`
-	Default     string                 `json:"Default"`
-	Values      []string               `json:"Values,omitempty"`
-	Min         int                    `json:"Min"`
-	Max         int                    `json:"Max"`
-	Step        int                    `json:"Step"`
-	Category    string                 `json:"Category"`
-	PerGame     bool                   `json:"PerGame"`
+	Key         string                `json:"Key"`
+	Label       string                `json:"Label"`
+	Description string                `json:"Description"`
+	Type        coreif.CoreOptionType `json:"Type"`
+	Default     string                `json:"Default"`
+	Values      []string              `json:"Values,omitempty"`
+	Min         int                   `json:"Min"`
+	Max         int                   `json:"Max"`
+	Step        int                   `json:"Step"`
+	Category    string                `json:"Category"`
+	PerGame     bool                  `json:"PerGame"`
 }
 
 // SystemInfoJSON returns the system info as a JSON string.
@@ -217,7 +217,7 @@ func SystemInfoJSON() string {
 
 	// Embed SystemInfo and override CoreOptions with string categories.
 	data, err := json.Marshal(struct {
-		emucore.SystemInfo
+		coreif.SystemInfo
 		CoreOptions []jsonCoreOption `json:"CoreOptions"`
 	}{
 		SystemInfo:  info,

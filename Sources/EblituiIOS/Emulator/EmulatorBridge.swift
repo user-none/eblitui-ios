@@ -41,6 +41,7 @@ public protocol EmulatorEngine: AnyObject {
     func getAudioSamples() -> Data?
     func setInput(player: Int, buttons: Int)
     func setOption(key: String, value: String)
+    func start()
     func serialize() -> Data?
     func deserialize(data: Data) -> Bool
     func getSRAM() -> Data?

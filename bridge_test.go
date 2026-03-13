@@ -4,19 +4,19 @@ import (
 	"encoding/json"
 	"testing"
 
-	emucore "github.com/user-none/eblitui/api"
+	"github.com/user-none/eblitui/coreif"
 )
 
 func TestCategoryString(t *testing.T) {
 	tests := []struct {
-		cat  emucore.CoreOptionCategory
+		cat  coreif.CoreOptionCategory
 		want string
 	}{
-		{emucore.CoreOptionCategoryAudio, "Audio"},
-		{emucore.CoreOptionCategoryVideo, "Video"},
-		{emucore.CoreOptionCategoryInput, "Input"},
-		{emucore.CoreOptionCategoryCore, "Core"},
-		{emucore.CoreOptionCategory(99), "Core"},
+		{coreif.CoreOptionCategoryAudio, "Audio"},
+		{coreif.CoreOptionCategoryVideo, "Video"},
+		{coreif.CoreOptionCategoryInput, "Input"},
+		{coreif.CoreOptionCategoryCore, "Core"},
+		{coreif.CoreOptionCategory(99), "Core"},
 	}
 
 	for _, tt := range tests {
@@ -29,42 +29,42 @@ func TestCategoryString(t *testing.T) {
 
 type mockFactory struct{}
 
-func (f *mockFactory) SystemInfo() emucore.SystemInfo {
-	return emucore.SystemInfo{
+func (f *mockFactory) SystemInfo() coreif.SystemInfo {
+	return coreif.SystemInfo{
 		Name:        "test",
 		ConsoleName: "Test Console",
 		Extensions:  []string{".bin"},
-		CoreOptions: []emucore.CoreOption{
+		CoreOptions: []coreif.CoreOption{
 			{
 				Key:      "opt_audio",
 				Label:    "Audio Option",
-				Category: emucore.CoreOptionCategoryAudio,
+				Category: coreif.CoreOptionCategoryAudio,
 			},
 			{
 				Key:      "opt_input",
 				Label:    "Input Option",
-				Category: emucore.CoreOptionCategoryInput,
+				Category: coreif.CoreOptionCategoryInput,
 			},
 			{
 				Key:      "opt_video",
 				Label:    "Video Option",
-				Category: emucore.CoreOptionCategoryVideo,
+				Category: coreif.CoreOptionCategoryVideo,
 			},
 			{
 				Key:      "opt_core",
 				Label:    "Core Option",
-				Category: emucore.CoreOptionCategoryCore,
+				Category: coreif.CoreOptionCategoryCore,
 			},
 		},
 	}
 }
 
-func (f *mockFactory) CreateEmulator(rom []byte, region emucore.Region) (emucore.Emulator, error) {
+func (f *mockFactory) CreateEmulator(rom []byte, region coreif.Region) (coreif.Emulator, error) {
 	return nil, nil
 }
 
-func (f *mockFactory) DetectRegion(rom []byte) (emucore.Region, bool) {
-	return emucore.RegionNTSC, false
+func (f *mockFactory) DetectRegion(rom []byte) (coreif.Region, bool) {
+	return coreif.RegionNTSC, false
 }
 
 func TestSystemInfoJSONCategoryStrings(t *testing.T) {
