@@ -30,7 +30,7 @@ func RegisterFactory(f coreif.CoreFactory) {
 }
 
 // Init creates an emulator from a ROM file path.
-// regionCode: 0=NTSC, 1=PAL
+// regionCode is ignored; video standard is handled internally by each core.
 // Returns true on success.
 func Init(path string, regionCode int) bool {
 	if factory == nil {
@@ -43,8 +43,7 @@ func Init(path string, regionCode int) bool {
 		return false
 	}
 
-	region := coreif.Region(regionCode)
-	e, err := factory.CreateEmulator(rom, region)
+	e, err := factory.CreateEmulator(rom)
 	if err != nil {
 		return false
 	}
@@ -230,11 +229,15 @@ func SystemInfoJSON() string {
 }
 
 // Region returns the current region (0=NTSC, 1=PAL).
+// Derived from FPS: <= 50 = PAL, else NTSC.
 func Region() int {
 	if emu == nil {
 		return 0
 	}
-	return int(emu.GetRegion())
+	if emu.GetTiming().FPS <= 50 {
+		return 1
+	}
+	return 0
 }
 
 // GetFPS returns the frames per second for the current emulator state.
@@ -246,6 +249,7 @@ func GetFPS() int {
 }
 
 // DetectRegionFromPath detects the region for a ROM file (0=NTSC, 1=PAL).
+// Creates a temporary emulator to read timing, then discards it.
 func DetectRegionFromPath(path string) int {
 	if factory == nil {
 		return 0
@@ -257,8 +261,16 @@ func DetectRegionFromPath(path string) int {
 		return 0
 	}
 
-	region, _ := factory.DetectRegion(rom)
-	return int(region)
+	e, err := factory.CreateEmulator(rom)
+	if err != nil {
+		return 0
+	}
+	fps := e.GetTiming().FPS
+	e.Close()
+	if fps <= 50 {
+		return 1
+	}
+	return 0
 }
 
 // HasSaveStates returns whether the emulator supports save states.

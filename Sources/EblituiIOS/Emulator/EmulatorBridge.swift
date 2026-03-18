@@ -1,6 +1,6 @@
 import Foundation
 
-/// Bundles pixel data with layout information, mirroring the standalone
+/// Bundles pixel data with layout information, mirroring the desktop
 /// renderer which receives pixels, stride, and activeHeight together.
 public struct FrameData {
     public let pixels: Data
