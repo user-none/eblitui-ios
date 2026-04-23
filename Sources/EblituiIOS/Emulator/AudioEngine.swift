@@ -11,14 +11,22 @@ class AudioEngine {
     private let sampleRate: Double
     static let channelCount: AVAudioChannelCount = 2
 
-    // Buffer level thresholds (in stereo sample frames)
-    static let targetBufferLevel = 3200   // ~67ms target at 48kHz (4 frames at 60fps)
-    static let minBufferLevel = 2400      // ~50ms - speed up below this
-    static let maxBufferLevel = 4800      // ~100ms - slow down above this
+    // Back-pressure target: producer parks when this many sample frames
+    // are queued into AVAudioEngine and not yet played. 2400 frames at
+    // 48kHz = 50ms of queued audio; plus AVAudioPlayerNode's internal
+    // buffer (~50ms) plus the session context buffer (~50ms) puts
+    // end-to-end latency around 150ms. Smaller values tighten latency at
+    // the cost of more audible glitches on transient hitches; larger
+    // values are safer but less responsive.
+    static let maxBufferLevel = 2400
 
-    // In-flight sample frame tracking via completion handlers
+    // In-flight sample frame tracking via completion handlers.
     private var inFlightFrames: Int = 0
     private let levelLock = NSLock()
+    // Signaled from the scheduleBuffer completion handler when
+    // inFlightFrames transitions from >= maxBufferLevel to below it,
+    // and from clearBuffer() / stop() to unblock a parked producer.
+    private let backPressureSemaphore = DispatchSemaphore(value: 0)
 
     var isRunning: Bool {
         audioEngine?.isRunning ?? false
@@ -63,21 +71,48 @@ class AudioEngine {
         self.audioFormat = format
     }
 
-    /// Stop the audio engine
+    /// Stop the audio engine. Signals any parked producer so the
+    /// emulation thread can exit its `queueSamples` call.
     func stop() {
+        // Pause first so the node is already silent by the time we
+        // discard its scheduled buffers — `stop()` otherwise cuts audio
+        // mid-sample and produces an audible click on app quit.
+        playerNode?.pause()
         playerNode?.stop()
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
+
+        levelLock.lock()
+        inFlightFrames = 0
+        levelLock.unlock()
+        backPressureSemaphore.signal()
     }
 
-    /// Queue audio samples for playback
-    /// Converts directly from bridge data (little-endian int16 interleaved stereo)
-    /// to AVAudioPCMBuffer (float32 non-interleaved) and schedules immediately.
+    /// Queue audio samples for playback. Blocks when the in-flight frame
+    /// count is at or above `maxBufferLevel`, providing back-pressure
+    /// that paces the caller to the audio hardware's drain rate — the
+    /// completion handler signals the semaphore when enough audio has
+    /// played to free up space.
+    ///
+    /// Converts directly from bridge data (little-endian int16
+    /// interleaved stereo) to AVAudioPCMBuffer (float32 non-interleaved)
+    /// and schedules immediately.
     func queueSamples(_ data: Data) {
         guard data.count >= 4,
               let player = playerNode,
               let format = audioFormat else { return }
+
+        // Back-pressure: park until in-flight count drops below the cap.
+        // `clearBuffer` and `stop` also signal the semaphore, so a user
+        // pause or shutdown unblocks a parked producer.
+        levelLock.lock()
+        while inFlightFrames >= Self.maxBufferLevel {
+            levelLock.unlock()
+            backPressureSemaphore.wait()
+            levelLock.lock()
+        }
+        levelLock.unlock()
 
         // 2 bytes per sample, 2 channels per frame
         let frameCount = data.count / 4
@@ -110,12 +145,37 @@ class AudioEngine {
         player.scheduleBuffer(buffer) { [weak self] in
             guard let self = self else { return }
             self.levelLock.lock()
+            let wasAtCap = self.inFlightFrames >= Self.maxBufferLevel
             self.inFlightFrames -= frameCount
+            let nowUnderCap = self.inFlightFrames < Self.maxBufferLevel
             self.levelLock.unlock()
+
+            // Signal only on the at-cap -> under-cap transition to avoid
+            // a semaphore syscall on every buffer completion.
+            if wasAtCap && nowUnderCap {
+                self.backPressureSemaphore.signal()
+            }
         }
     }
 
-    /// Clear the audio buffer
+    /// Pause audio playback without discarding queued buffers. On
+    /// `resumePlayback` the already-scheduled audio continues from where
+    /// it left off, producing no audible seam. Use this for user-initiated
+    /// pause (pause menu, app backgrounding). Does NOT signal the
+    /// back-pressure semaphore — the producer naturally unblocks when
+    /// playback resumes and buffers drain again.
+    func pausePlayback() {
+        playerNode?.pause()
+    }
+
+    /// Resume playback after `pausePlayback`.
+    func resumePlayback() {
+        playerNode?.play()
+    }
+
+    /// Discard all queued audio and reset state. Causes an abrupt cut in
+    /// output (a click/pop); use only when stale audio must be flushed
+    /// (e.g. rewind, save-state load). Signals any parked producer.
     func clearBuffer() {
         levelLock.lock()
         inFlightFrames = 0
@@ -123,14 +183,8 @@ class AudioEngine {
 
         playerNode?.stop()
         playerNode?.play()
-    }
 
-    /// Get the current buffer level in stereo sample frames
-    func getBufferLevel() -> Int {
-        levelLock.lock()
-        let level = inFlightFrames
-        levelLock.unlock()
-        return level
+        backPressureSemaphore.signal()
     }
 
     /// Set the audio volume (0.0 = muted, 1.0 = full volume)

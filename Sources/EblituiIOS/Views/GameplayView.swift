@@ -405,14 +405,18 @@ class EmulatorManager: ObservableObject {
     func stop() {
         isRunning = false
 
-        // Wait for emulation thread to finish before releasing
+        // Stop the audio engine first. This signals the back-pressure
+        // semaphore so a producer parked inside queueSamples unblocks
+        // and the emulation thread can observe `isRunning = false` and
+        // exit; otherwise the join loop below would spin forever.
+        audioEngine?.stop()
+        audioEngine = nil
+
         while emulationThread?.isExecuting == true {
             Thread.sleep(forTimeInterval: 0.001)
         }
         emulationThread = nil
 
-        audioEngine?.stop()
-        audioEngine = nil
         emulator.unload()
     }
 
@@ -420,20 +424,20 @@ class EmulatorManager: ObservableObject {
         emulationLock.lock()
         defer { emulationLock.unlock() }
         isPaused = true
-        audioEngine?.clearBuffer()
+        // Cleanly pause the player node (doesn't discard queued audio,
+        // so no click/pop on entering the pause menu). When we resume,
+        // queued buffers continue from where playback stopped.
+        audioEngine?.pausePlayback()
     }
 
     func resume() {
         emulationLock.lock()
         defer { emulationLock.unlock() }
         isPaused = false
+        audioEngine?.resumePlayback()
     }
 
     private func emulationLoop() {
-        let targetFPS = fps
-        let frameTime = 1.0 / Double(targetFPS)
-        var lastFrameTime = CACurrentMediaTime()
-
         while isRunning {
             autoreleasepool {
                 // Check if paused
@@ -443,7 +447,6 @@ class EmulatorManager: ObservableObject {
 
                 if paused {
                     Thread.sleep(forTimeInterval: 0.01)
-                    lastFrameTime = CACurrentMediaTime()
                     return
                 }
 
@@ -453,27 +456,13 @@ class EmulatorManager: ObservableObject {
                 cachedFrameData = emulator.getFrameBuffer()
                 frameBufferLock.unlock()
 
+                // Pacing: queueSamples blocks when the audio engine's
+                // in-flight frame count is at or above its cap, releasing
+                // when the scheduleBuffer completion handler reports the
+                // audio hardware has drained enough. No wall-clock sleep.
                 if let samples = emulator.getAudioSamples() {
                     audioEngine?.queueSamples(samples)
                 }
-
-                // --- Timing ---
-                let now = CACurrentMediaTime()
-                let elapsed = now - lastFrameTime
-                var sleepTime = frameTime - elapsed
-
-                let bufferLevel = audioEngine?.getBufferLevel() ?? AudioEngine.targetBufferLevel
-                if bufferLevel < AudioEngine.minBufferLevel {
-                    sleepTime *= 0.9
-                } else if bufferLevel > AudioEngine.maxBufferLevel {
-                    sleepTime *= 1.1
-                }
-
-                if sleepTime > 0.001 {
-                    Thread.sleep(forTimeInterval: sleepTime)
-                }
-
-                lastFrameTime = CACurrentMediaTime()
             }
         }
     }
