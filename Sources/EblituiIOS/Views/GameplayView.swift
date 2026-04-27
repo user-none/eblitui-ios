@@ -384,7 +384,7 @@ class EmulatorManager: ObservableObject {
 
     func start(muted: Bool) {
         // Always setup audio engine (needed for audio-driven timing even when muted)
-        audioEngine = AudioEngine()
+        audioEngine = AudioEngine(fps: emulator.fps)
         do {
             try audioEngine?.start(muted: muted)
         } catch {
@@ -405,9 +405,9 @@ class EmulatorManager: ObservableObject {
     func stop() {
         isRunning = false
 
-        // Stop the audio engine first. This signals the back-pressure
-        // semaphore so a producer parked inside queueSamples unblocks
-        // and the emulation thread can observe `isRunning = false` and
+        // Stop the audio engine first. AudioEngine.stop broadcasts the
+        // demand condition so a producer parked in waitForDemand
+        // unblocks and the emulation thread can observe shutdown and
         // exit; otherwise the join loop below would spin forever.
         audioEngine?.stop()
         audioEngine = nil
@@ -450,19 +450,24 @@ class EmulatorManager: ObservableObject {
                     return
                 }
 
+                // Pacing: park until the audio engine reports a frame's
+                // worth of bytes drained, or until shutdown. No
+                // wall-clock sleep.
+                if let audio = audioEngine, !audio.waitForDemand() {
+                    isRunning = false
+                    return
+                }
+
                 emulator.runFrame()
 
                 frameBufferLock.lock()
                 cachedFrameData = emulator.getFrameBuffer()
                 frameBufferLock.unlock()
 
-                // Pacing: queueSamples blocks when the audio engine's
-                // in-flight frame count is at or above its cap, releasing
-                // when the scheduleBuffer completion handler reports the
-                // audio hardware has drained enough. No wall-clock sleep.
-                if let samples = emulator.getAudioSamples() {
-                    audioEngine?.queueSamples(samples)
-                }
+                // queueSamples auto-pads nil/empty input with one
+                // frame of silence so the demand signal keeps firing
+                // even when the core produced no audio (cold start).
+                audioEngine?.queueSamples(emulator.getAudioSamples())
             }
         }
     }

@@ -1,56 +1,93 @@
 import Foundation
 import AVFoundation
 
-/// Audio playback engine using AVAudioEngine with scheduled buffers
+/// Audio playback engine using AVAudioEngine with scheduled buffers.
+///
+/// Pacing is driven by consumer drain: each `scheduleBuffer` completion
+/// handler reports the number of frames the audio device consumed.
+/// Those frame counts accumulate in `drainedFrames`, and once per
+/// frame's worth (`samplesPerFrame`) the producer is signalled via
+/// `waitForDemand`. The emulation thread parks on that signal between
+/// frames so the audio device's drain rate is the loop's clock.
+///
+/// Empty input to `queueSamples` is replaced with a precomputed silent
+/// buffer so the demand signal keeps firing during cold-start frames
+/// where the core has not yet produced audio.
 class AudioEngine {
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var audioFormat: AVAudioFormat?
 
-    // Audio format from SystemInfo
-    private let sampleRate: Double
+    // Audio format from SystemInfo (requested rate; actual rate is read
+    // from the connected format after start() and used for pacing math).
+    private let requestedSampleRate: Double
+    private let fps: Int
     static let channelCount: AVAudioChannelCount = 2
 
-    // Back-pressure target: producer parks when this many sample frames
-    // are queued into AVAudioEngine and not yet played. 2400 frames at
-    // 48kHz = 50ms of queued audio; plus AVAudioPlayerNode's internal
-    // buffer (~50ms) plus the session context buffer (~50ms) puts
-    // end-to-end latency around 150ms. Smaller values tighten latency at
-    // the cost of more audible glitches on transient hitches; larger
-    // values are safer but less responsive.
+    // Producer-side cap on how many frames may be queued ahead of the
+    // audio device. Sized to ~50ms at 48kHz; smaller values tighten
+    // latency at the cost of more audible glitches on transient
+    // hitches, larger values are safer but less responsive. Used to
+    // derive `maxPendingDemand` from `samplesPerFrame`.
     static let maxBufferLevel = 2400
 
-    // In-flight sample frame tracking via completion handlers.
-    private var inFlightFrames: Int = 0
-    private let levelLock = NSLock()
-    // Signaled from the scheduleBuffer completion handler when
-    // inFlightFrames transitions from >= maxBufferLevel to below it,
-    // and from clearBuffer() / stop() to unblock a parked producer.
-    private let backPressureSemaphore = DispatchSemaphore(value: 0)
+    // Initial demand the producer is allowed to consume before the
+    // first scheduleBuffer completion fires. AVAudioPlayerNode buffers
+    // ~50ms internally before its first completion lands; at 60Hz that
+    // is roughly three frames, so four kickstart frames keeps the
+    // producer fed across the cold-start window.
+    static let kickstartFrames = 4
+
+    // Demand-signal pacing state. `demandCondition` serves as both the
+    // mutex and the condition variable for `pendingDemand`.
+    private let demandCondition = NSCondition()
+    private var samplesPerFrame: Int = 0
+    private var drainedFrames: Int = 0
+    private var pendingDemand: Int = 0
+    private var maxPendingDemand: Int = 0
+    private var shutdown: Bool = false
+
+    // Reused across every empty-input frame. AVAudioPlayerNode retains
+    // the buffer until completion fires, and the buffer is read-only
+    // after construction, so a single shared instance is safe.
+    private var silentBuffer: AVAudioPCMBuffer?
 
     var isRunning: Bool {
         audioEngine?.isRunning ?? false
     }
 
-    init() {
-        self.sampleRate = Double(EmulatorBridge.systemInfo.sampleRate)
+    init(fps: Int) {
+        self.fps = fps
+        self.requestedSampleRate = Double(EmulatorBridge.systemInfo.sampleRate)
     }
 
-    /// Start the audio engine
+    /// Start the audio engine.
+    ///
+    /// `samplesPerFrame` and `maxPendingDemand` are computed from the
+    /// actual hardware sample rate after the engine starts, not the
+    /// requested rate, because `setPreferredSampleRate` is a request
+    /// the hardware may decline. Using the actual rate keeps the
+    /// drain accumulator aligned with real-time playback.
+    ///
+    /// TODO: handle AVAudioSession interruptions (phone call, Siri,
+    /// route change). When interrupted, scheduleBuffer completions
+    /// stop firing and a producer parked in waitForDemand will stall
+    /// indefinitely. Same latent issue existed with the prior
+    /// semaphore design and is out of scope for this change.
     func start(muted: Bool = false) throws {
         // Configure audio session
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        try session.setPreferredSampleRate(sampleRate)
+        try session.setPreferredSampleRate(requestedSampleRate)
         try session.setActive(true)
 
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
 
-        // Create format: stereo float32 at system sample rate
+        // Create format: stereo float32 at requested sample rate.
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
+            sampleRate: requestedSampleRate,
             channels: Self.channelCount,
             interleaved: false
         ) else {
@@ -69,50 +106,94 @@ class AudioEngine {
         self.audioEngine = engine
         self.playerNode = player
         self.audioFormat = format
+
+        // Compute pacing math from the actual rate the engine settled
+        // on. Reading mainMixerNode's output format reflects what the
+        // hardware accepted.
+        let actualRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
+        let perFrame = max(1, Int((actualRate / Double(fps)).rounded()))
+
+        demandCondition.lock()
+        samplesPerFrame = perFrame
+        maxPendingDemand = max(1, Self.maxBufferLevel / perFrame + 1)
+        pendingDemand = Self.kickstartFrames
+        drainedFrames = 0
+        shutdown = false
+        demandCondition.unlock()
+
+        // Build the silent buffer once. PCM buffers from this initializer
+        // are zero-filled, so no explicit memset is required.
+        if let silent = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(perFrame)) {
+            silent.frameLength = AVAudioFrameCount(perFrame)
+            silentBuffer = silent
+        }
     }
 
-    /// Stop the audio engine. Signals any parked producer so the
-    /// emulation thread can exit its `queueSamples` call.
+    /// Stop the audio engine. Wakes any producer parked in
+    /// `waitForDemand` so the emulation thread can observe shutdown
+    /// and exit.
     func stop() {
+        // Wake the producer first so it observes shutdown rather than
+        // racing into a queueSamples call against a torn-down player.
+        demandCondition.lock()
+        shutdown = true
+        demandCondition.broadcast()
+        demandCondition.unlock()
+
         // Pause first so the node is already silent by the time we
-        // discard its scheduled buffers — `stop()` otherwise cuts audio
+        // discard its scheduled buffers - stop() otherwise cuts audio
         // mid-sample and produces an audible click on app quit.
         playerNode?.pause()
         playerNode?.stop()
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
-
-        levelLock.lock()
-        inFlightFrames = 0
-        levelLock.unlock()
-        backPressureSemaphore.signal()
+        silentBuffer = nil
     }
 
-    /// Queue audio samples for playback. Blocks when the in-flight frame
-    /// count is at or above `maxBufferLevel`, providing back-pressure
-    /// that paces the caller to the audio hardware's drain rate — the
-    /// completion handler signals the semaphore when enough audio has
-    /// played to free up space.
+    /// Park the producer until the audio device has drained enough
+    /// bytes to request another frame, or until `stop` is called.
+    /// Returns true when the caller should run the next frame, false
+    /// when the engine is shutting down and the producer should exit.
+    func waitForDemand() -> Bool {
+        demandCondition.lock()
+        while !shutdown && pendingDemand == 0 {
+            demandCondition.wait()
+        }
+        if shutdown {
+            demandCondition.unlock()
+            return false
+        }
+        pendingDemand -= 1
+        demandCondition.unlock()
+        return true
+    }
+
+    /// Queue audio samples for playback. `nil` or empty input is
+    /// replaced with one frame of silence so the consumer always has
+    /// bytes to drain - without this a cold-start frame that produced
+    /// no audio would leave demand stuck and deadlock the producer.
+    /// Short non-empty input is passed through unchanged; only
+    /// zero-length / nil input is padded.
     ///
     /// Converts directly from bridge data (little-endian int16
     /// interleaved stereo) to AVAudioPCMBuffer (float32 non-interleaved)
     /// and schedules immediately.
-    func queueSamples(_ data: Data) {
-        guard data.count >= 4,
-              let player = playerNode,
-              let format = audioFormat else { return }
+    func queueSamples(_ data: Data?) {
+        guard let player = playerNode, let format = audioFormat else { return }
 
-        // Back-pressure: park until in-flight count drops below the cap.
-        // `clearBuffer` and `stop` also signal the semaphore, so a user
-        // pause or shutdown unblocks a parked producer.
-        levelLock.lock()
-        while inFlightFrames >= Self.maxBufferLevel {
-            levelLock.unlock()
-            backPressureSemaphore.wait()
-            levelLock.lock()
+        // Empty / nil path: schedule the precomputed silent buffer so
+        // its completion handler still fires and drives the demand
+        // accumulator.
+        guard let data, data.count >= 4 else {
+            if let silent = silentBuffer {
+                let frames = Int(silent.frameLength)
+                player.scheduleBuffer(silent) { [weak self] in
+                    self?.handleDrain(frames: frames)
+                }
+            }
+            return
         }
-        levelLock.unlock()
 
         // 2 bytes per sample, 2 channels per frame
         let frameCount = data.count / 4
@@ -138,32 +219,40 @@ class AudioEngine {
             }
         }
 
-        levelLock.lock()
-        inFlightFrames += frameCount
-        levelLock.unlock()
-
         player.scheduleBuffer(buffer) { [weak self] in
-            guard let self = self else { return }
-            self.levelLock.lock()
-            let wasAtCap = self.inFlightFrames >= Self.maxBufferLevel
-            self.inFlightFrames -= frameCount
-            let nowUnderCap = self.inFlightFrames < Self.maxBufferLevel
-            self.levelLock.unlock()
-
-            // Signal only on the at-cap -> under-cap transition to avoid
-            // a semaphore syscall on every buffer completion.
-            if wasAtCap && nowUnderCap {
-                self.backPressureSemaphore.signal()
-            }
+            self?.handleDrain(frames: frameCount)
         }
     }
 
+    /// Invoked by every scheduled buffer's completion handler with the
+    /// number of frames the audio device consumed. Accumulates a
+    /// per-frame counter and releases producer demand once per
+    /// `samplesPerFrame`, capped at `maxPendingDemand` so a bursty
+    /// consumer (e.g. AVAudio's first batch of completions) cannot
+    /// enqueue unbounded catch-up work.
+    private func handleDrain(frames: Int) {
+        demandCondition.lock()
+        drainedFrames += frames
+        while drainedFrames >= samplesPerFrame {
+            drainedFrames -= samplesPerFrame
+            if pendingDemand < maxPendingDemand {
+                pendingDemand += 1
+            }
+        }
+        if pendingDemand > 0 {
+            demandCondition.broadcast()
+        }
+        demandCondition.unlock()
+    }
+
     /// Pause audio playback without discarding queued buffers. On
-    /// `resumePlayback` the already-scheduled audio continues from where
-    /// it left off, producing no audible seam. Use this for user-initiated
-    /// pause (pause menu, app backgrounding). Does NOT signal the
-    /// back-pressure semaphore — the producer naturally unblocks when
-    /// playback resumes and buffers drain again.
+    /// `resumePlayback` the already-scheduled audio continues from
+    /// where it left off, producing no audible seam. While paused, no
+    /// completion handlers fire and `pendingDemand` does not advance;
+    /// the producer parks in `waitForDemand` (or hits the emulation
+    /// loop's pause check) and resumes naturally when buffers start
+    /// completing again. Use this for user-initiated pause (pause menu,
+    /// app backgrounding).
     func pausePlayback() {
         playerNode?.pause()
     }
@@ -173,18 +262,20 @@ class AudioEngine {
         playerNode?.play()
     }
 
-    /// Discard all queued audio and reset state. Causes an abrupt cut in
-    /// output (a click/pop); use only when stale audio must be flushed
-    /// (e.g. rewind, save-state load). Signals any parked producer.
+    /// Discard all queued audio and reset demand state. Causes an
+    /// abrupt cut in output (a click/pop); use only when stale audio
+    /// must be flushed (e.g. rewind, save-state load). Re-primes
+    /// kickstart demand so the producer can keep running once the
+    /// player resumes.
     func clearBuffer() {
-        levelLock.lock()
-        inFlightFrames = 0
-        levelLock.unlock()
+        demandCondition.lock()
+        drainedFrames = 0
+        pendingDemand = Self.kickstartFrames
+        demandCondition.broadcast()
+        demandCondition.unlock()
 
         playerNode?.stop()
         playerNode?.play()
-
-        backPressureSemaphore.signal()
     }
 
     /// Set the audio volume (0.0 = muted, 1.0 = full volume)
