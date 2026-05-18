@@ -43,10 +43,8 @@ func Init(path string, regionCode int) bool {
 		return false
 	}
 
-	e, err := factory.CreateEmulator(rom)
-	if err != nil {
-		return false
-	}
+	e := factory.CreateEmulator()
+	e.SetRom(rom)
 
 	emu = e
 
@@ -261,10 +259,8 @@ func DetectRegionFromPath(path string) int {
 		return 0
 	}
 
-	e, err := factory.CreateEmulator(rom)
-	if err != nil {
-		return 0
-	}
+	e := factory.CreateEmulator()
+	e.SetRom(rom)
 	fps := e.GetTiming().FPS
 	e.Close()
 	if fps <= 50 {

@@ -59,8 +59,8 @@ func (f *mockFactory) SystemInfo() coreif.SystemInfo {
 	}
 }
 
-func (f *mockFactory) CreateEmulator(rom []byte) (coreif.Emulator, error) {
-	return nil, nil
+func (f *mockFactory) CreateEmulator() coreif.Emulator {
+	return nil
 }
 
 func TestSystemInfoJSONCategoryStrings(t *testing.T) {

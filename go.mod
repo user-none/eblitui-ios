@@ -3,8 +3,8 @@ module github.com/user-none/eblitui-ios
 go 1.25.7
 
 require (
-	github.com/user-none/eblitui/coreif v0.5.0
-	github.com/user-none/eblitui/romloader v0.2.0
+	github.com/user-none/eblitui/coreif v0.6.0
+	github.com/user-none/eblitui/romloader v0.3.0
 )
 
 require (
